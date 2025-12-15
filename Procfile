@@ -1,1 +1,2 @@
 
+worker: python Pubg.py
