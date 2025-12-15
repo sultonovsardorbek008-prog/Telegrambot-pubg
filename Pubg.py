@@ -1,15 +1,19 @@
 import logging
 import sqlite3
+import os  # Muhit o'zgaruvchilarini o'qish uchun qo'shildi
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
-# --- SOZLAMALAR ---
-API_TOKEN = 'BU_YERGA_BOT_TOKENINI_QOYING'
-ADMIN_ID = 123456789  # O'zingizning Telegram ID raqamingizni yozing
-REFERRAL_BONUS = 500  # Referal uchun beriladigan summa (so'mda)
+# --- MUHIT O'ZGARUVCHILARI (ENVIRONMENT VARIABLES) ---
+# os.environ.get() yordamida sozlamalarni muhitdan o'qish. 
+# Agar o'zgaruvchi o'rnatilmagan bo'lsa, defolt (ikkinchi) qiymat ishlatiladi.
+API_TOKEN = os.environ.get('API_TOKEN', 'BU_YERGA_BOT_TOKENINI_QOYING')
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 123456789))  # Int ga o'tkazish
+REFERRAL_BONUS = int(os.environ.get('REFERRAL_BONUS', 500))  # Int ga o'tkazish
+DATABASE_FILE = os.environ.get('DATABASE_FILE', 'pubg_store.db') # DB nomi
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -17,7 +21,7 @@ storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # --- MA'LUMOTLAR BAZASI (SQLite) ---
-conn = sqlite3.connect('pubg_store.db')
+conn = sqlite3.connect(DATABASE_FILE) # O'zgaruvchidan foydalanish
 cursor = conn.cursor()
 
 # Jadvallarni yaratish
@@ -63,6 +67,7 @@ def add_user(user_id, referrer_id=None):
     if not get_user(user_id):
         cursor.execute("INSERT INTO users (user_id, balance, referrer_id) VALUES (?, 0, ?)", (user_id, referrer_id))
         if referrer_id:
+            # REFERRAL_BONUS o'zgaruvchisidan foydalanish
             cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (REFERRAL_BONUS, referrer_id))
             bot.send_message(referrer_id, f"🎉 Sizning havolangiz orqali do'stingiz qo'shildi! +{REFERRAL_BONUS} so'm.")
         conn.commit()
@@ -155,6 +160,7 @@ async def process_purchase(message: types.Message, state: FSMContext):
         InlineKeyboardButton("❌ Bekor qilish", callback_data=f"decline_{user_id}_{price}")
     )
     
+    # ADMIN_ID o'zgaruvchisidan foydalanish
     await bot.send_message(ADMIN_ID, 
                            f"🛒 **Yangi buyurtma!**\n"
                            f"👤 User: {message.from_user.full_name} (ID: {user_id})\n"
@@ -222,6 +228,7 @@ async def buy_account(call: types.CallbackQuery):
     cursor.execute("INSERT INTO history (user_id, action, amount) VALUES (?, ?, ?)", (call.from_user.id, f"Akkount: {acc[1]}", -acc[3]))
     conn.commit()
 
+    # ADMIN_ID o'zgaruvchisidan foydalanish
     await bot.send_message(ADMIN_ID, f"✅ Akkount sotildi!\nUser: {call.from_user.full_name}\nAkkount: {acc[1]}")
     await call.message.delete()
     await call.message.answer(f"✅ Tabriklaymiz! {acc[1]} akkountini sotib oldingiz. Admin siz bilan bog'lanadi.")
@@ -229,7 +236,7 @@ async def buy_account(call: types.CallbackQuery):
 # --- ADMIN PANEL ---
 @dp.message_handler(commands=['admin'])
 async def admin_panel(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
+    if message.from_user.id == ADMIN_ID: # ADMIN_ID o'zgaruvchisidan foydalanish
         kb = ReplyKeyboardMarkup(resize_keyboard=True)
         kb.add("➕ Akkount qo'shish", "💵 Narxlarni o'zgartirish")
         kb.add("⬅️ Asosiy menyu")
@@ -317,4 +324,3 @@ async def change_price_finish(message: types.Message, state: FSMContext):
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
-
