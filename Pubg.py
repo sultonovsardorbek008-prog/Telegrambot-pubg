@@ -11,8 +11,15 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
                            InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove, FSInputFile)
 
 # --- KONFIGURATSIYA ---
-API_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID")) # Admin ID ni ENV dan olish shart
+# API_TOKEN = os.getenv("BOT_TOKEN")
+# ADMIN_ID = int(os.getenv("ADMIN_ID")) # Admin ID ni ENV dan olish shart
+
+# !!! ESLATMA: Ushbu kodni ishga tushirish uchun "BOT_TOKEN" va "ADMIN_ID"
+# muhit o'zgaruvchilari (Environment Variables) to'g'ri o'rnatilganligiga ishonch hosil qiling.
+# Agar siz ENV ishlatmasangiz, test uchun quyidagini o'zgartiring:
+API_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE") # O'zingizning bot tokeningiz
+ADMIN_ID = int(os.getenv("ADMIN_ID", "YOUR_ADMIN_ID_HERE")) # O'zingizning Admin ID
+
 # DB_NAME
 DB_NAME = os.getenv("DB_NAME", "bot_database_pubg_uc.db")
 
@@ -76,9 +83,15 @@ def init_db():
         conn.commit()
     
     # Migratsiyalar (avvalgidek qoldi + yangi ustunlar)
-    columns_users = ["status_level", "referrer_id", "joined_at"]
+    columns_users = ["status_level", "referrer_id", "joined_at", "status_expire"]
     for col in columns_users:
-        try: db_query(f"ALTER TABLE users ADD COLUMN {col} INTEGER" if col == "status_level" or col == "referrer_id" else f"ALTER TABLE users ADD COLUMN {col} TEXT", commit=True)
+        try: 
+            if col == "status_level" or col == "referrer_id":
+                db_query(f"ALTER TABLE users ADD COLUMN {col} INTEGER", commit=True)
+            elif col == "status_expire":
+                 db_query(f"ALTER TABLE users ADD COLUMN {col} TEXT", commit=True)
+            elif col == "joined_at":
+                 db_query(f"ALTER TABLE users ADD COLUMN {col} TEXT DEFAULT CURRENT_TIMESTAMP", commit=True)
         except: pass
     
     columns_projects = ["description", "media_id", "media_type", "file_id", "seller_id", "is_approved"]
@@ -122,7 +135,7 @@ def get_dynamic_prices():
         "prem_price": float(get_config("status_price_2", 50.0)), # Gold
         "king_price": float(get_config("status_price_3", 200.0)), # Platinum
         "dev_price": float(get_config("status_price_4", 25.0)), # Developer - 25 UC
-        # Akkount Sotish Komissiyasi
+        # Akkount Sotish Komissiyasi (Bu yerda qiymat saqlanadi, lekin hozirda ishlatilmaydi)
         "proj_sell_commission": float(get_config("proj_sell_commission", 2.5)) 
     }
 
@@ -303,6 +316,10 @@ async def cmd_start(message: types.Message, command: CommandObject):
 @dp.message(F.text == "👤 Kabinet")
 async def kabinet(message: types.Message):
     data = get_user_data(message.from_user.id)
+    if data is None: # Agar qandaydir sabab bilan user bazada bo'lmasa
+        await cmd_start(message, CommandObject(text="/start", prefix="/", args=""))
+        data = get_user_data(message.from_user.id)
+    
     status_name = STATUS_DATA[data['level']]['name']
     limit = STATUS_DATA[data['level']]['limit']
     
@@ -466,6 +483,7 @@ async def view_project(callback: types.CallbackQuery):
         else:
             await callback.message.answer(caption, reply_markup=kb, parse_mode="Markdown")
     except Exception as e:
+        # Fayl yuborishda xato bo'lsa (Masalan, fayl_id noto'g'ri bo'lsa)
         await callback.message.answer(caption, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
@@ -490,12 +508,12 @@ async def buy_project_process(callback: types.CallbackQuery):
         db_query("UPDATE users SET balance = balance - ? WHERE id = ?", (final_price, callback.from_user.id), commit=True)
         await callback.message.answer(f"✅ Xarid amalga oshdi! Hisobdan {format_num(final_price)} {CURRENCY_SYMBOL} yechildi.")
         
-        # Sotuvchiga komissiya berish
+        # Sotuvchiga to'liq narxni berish (Komissiya emas!)
         if seller_id and final_price > 0:
-            commission = get_dynamic_prices()['proj_sell_commission']
-            db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (commission, seller_id), commit=True)
+            reward_amount = final_price # To'liq narx
+            db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (reward_amount, seller_id), commit=True)
             try:
-                await bot.send_message(seller_id, f"🎉 Akkountingiz sotildi (ID: {pid})! +{format_num(commission)} {CURRENCY_SYMBOL} hisobingizga tushdi.")
+                await bot.send_message(seller_id, f"🎉 Akkountingiz sotildi (ID: {pid})! +{format_num(reward_amount)} {CURRENCY_SYMBOL} hisobingizga tushdi.")
             except: pass
             
     await bot.send_document(callback.message.chat.id, file_id, caption=f"✅ **{name} Akkounti**\n\nFaylni muvaffaqiyatli yuklab oldingiz!")
@@ -643,7 +661,7 @@ async def partnership_menu(message: types.Message):
     
     msg = (f"🤝 **AKKOUNT SOTISH HAMKORLIGI (DEVELOPER STATUS):**\n\n"
            f"Bu bo'limda siz o'zingizning PUBG akkountlaringizni bot orqali soting va pul ishlang!\n\n"
-           f"✅ Har bir sotilgan akkount uchun sizga **{format_num(prices['proj_sell_commission'])} {CURRENCY_SYMBOL}** komissiya beriladi.\n"
+           f"✅ Sotilgan akkountning **to'liq narxi** sizning hisobingizga o'tkaziladi.\n"
            f"✅ Developer statusi narxi: **{prices['dev_price']} {CURRENCY_SYMBOL}** (oyiga).\n\n")
     
     kb_rows = []
@@ -658,7 +676,7 @@ async def partnership_menu(message: types.Message):
     
     await message.answer(msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="Markdown")
 
-# --- USER AKKOUNT QO'SHISH JARAYONI ---
+# --- USER AKKOUNT QO'SHISH JARAYONI --- (O'zgarishsiz)
 
 @dp.callback_query(F.data == "user_add_proj")
 async def user_add_proj_start(callback: types.CallbackQuery, state: FSMContext):
@@ -741,7 +759,7 @@ async def user_add_p_file(message: types.Message, state: FSMContext):
     await message.answer("✅ Akkountingiz admin tasdig'iga yuborildi. Tasdiqlangandan keyin u sotuvga chiqariladi.", reply_markup=main_menu(message.from_user.id))
     await state.clear()
 
-# --- ADMIN: AKKOUNT TASDIQLASH / RAD ETISH ---
+# --- ADMIN: AKKOUNT TASDIQLASH / RAD ETISH --- (O'zgarishsiz)
 
 @dp.callback_query(F.data.startswith("adm_proj_app:"))
 async def adm_proj_approve(callback: types.CallbackQuery):
@@ -771,7 +789,7 @@ async def adm_proj_reject(callback: types.CallbackQuery):
         await bot.send_message(seller_id, f"❌ Afsuski, sizning **{name}** akkountingiz admin tomonidan rad etildi.")
     except: pass
 
-# --- PUL YECHIB OLISH FUNKSIYALARI (FAQAT DEVELOPER UCHUN) ---
+# --- PUL YECHIB OLISH FUNKSIYALARI (FAQAT DEVELOPER UCHUN) --- (O'zgarishsiz)
 
 @dp.callback_query(F.data == "withdraw_start")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
@@ -878,8 +896,50 @@ async def adm_back_main(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     await admin_panel(callback.message)
 
-# --- AKKOUNT QO'SHISH (LOYIHA QO'SHISH) ---
-# ... (Admin funksiyalari o'zgarishsiz) ...
+# --- USER BALANSINI TAHRIRLASH --- (O'zgarishsiz)
+
+@dp.callback_query(F.data == "adm_edit_bal")
+async def adm_edit_bal_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    await callback.message.edit_text("🆔 Balansini tahrirlamoqchi bo'lgan foydalanuvchi ID raqamini kiriting:", reply_markup=cancel_kb())
+    await state.set_state(AdminState.edit_balance_id)
+
+@dp.message(AdminState.edit_balance_id)
+async def adm_edit_bal_id(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    if not message.text.isdigit():
+        return await message.answer("⚠️ Iltimos, faqat raqamlardan iborat ID kiriting!")
+        
+    user_id = int(message.text)
+    user_data = get_user_data(user_id)
+    if user_data is None:
+        return await message.answer("⚠️ Bunday ID ga ega foydalanuvchi topilmadi!")
+
+    await state.update_data(edit_user_id=user_id, old_balance=user_data['balance'])
+    await message.answer(f"💰 **{user_id}** ID li foydalanuvchining joriy balansi: **{format_num(user_data['balance'])} {CURRENCY_SYMBOL}**\n\nYangi balans miqdorini kiriting:")
+    await state.set_state(AdminState.edit_balance_amount)
+
+@dp.message(AdminState.edit_balance_amount)
+async def adm_edit_bal_amount(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        new_balance = float(message.text)
+    except ValueError:
+        return await message.answer("⚠️ Iltimos, to'g'ri raqam kiriting!")
+
+    data = await state.get_data()
+    user_id = data['edit_user_id']
+    
+    db_query("UPDATE users SET balance = ? WHERE id = ?", (new_balance, user_id), commit=True)
+    
+    await message.answer(f"✅ **{user_id}** ID li foydalanuvchi balansi **{format_num(new_balance)} {CURRENCY_SYMBOL}** ga tahrirlandi.", reply_markup=main_menu(message.from_user.id))
+    try:
+        await bot.send_message(user_id, f"🚨 **ADMIN XABARI!**\nSizning balansingiz admin tomonidan **{format_num(new_balance)} {CURRENCY_SYMBOL}** ga tahrirlandi.")
+    except: pass
+    await state.clear()
+
+
+# --- AKKOUNT QO'SHISH (LOYIHA QO'SHISH) --- (O'zgarishsiz)
 
 @dp.callback_query(F.data == "adm_add_proj")
 async def adm_add_proj_start(callback: types.CallbackQuery, state: FSMContext):
@@ -945,7 +1005,7 @@ async def adm_p_file(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# --- YANGI: AKKOUNT TARNIRLASH (LOYIHA TARNIRLASH) ---
+# --- YANGI: AKKOUNT TARNIRLASH (LOYIHA TARNIRLASH) --- (O'zgarishsiz)
 
 @dp.callback_query(F.data == "adm_manage_proj")
 async def adm_manage_proj(callback: types.CallbackQuery):
@@ -1081,7 +1141,7 @@ async def adm_save_proj_file(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# --- UC TO'PLAMLARINI BOSHQARISH / TAHRIRLASH ---
+# --- UC TO'PLAMLARINI BOSHQARISH / TAHRIRLASH --- (O'zgarishsiz)
 
 @dp.callback_query(F.data == "adm_manage_uc")
 async def adm_manage_uc(callback: types.CallbackQuery):
@@ -1223,7 +1283,7 @@ async def adm_save_uc_usd(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# --- NARXLAR VA KONFIGURATSIYALAR --- (Developer narxi qo'shildi)
+# --- NARXLAR VA KONFIGURATSIYALAR --- (O'zgarishsiz)
 
 @dp.callback_query(F.data == "adm_prices")
 async def adm_prices_list(callback: types.CallbackQuery):
@@ -1304,7 +1364,7 @@ async def topup_curr(message: types.Message, state: FSMContext):
     if "UZS" in message.text:
         curr, rate, card, holder = "UZS", rates['uzs'], CARD_UZS, CARD_NAME
     elif "USD" in message.text:
-        curr, rate, card, holder = "USD", rates['usd'], CARD_VISA, "Visa Holder"
+        curr, rate, card, holder = "USD", rates['usd'], CARD_VISA, CARD_NAME
     else: 
         return await message.answer("⚠️ Iltimos, tugmalardan birini tanlang!")
     
