@@ -271,9 +271,9 @@ async def cmd_start(message: types.Message, command: CommandObject):
             except: pass
 
     welcome_text = get_text("welcome", 
-                            f"👋 **Assalomu alaykum, {message.from_user.full_name}!**\n\n"
-                            f"🤖 **SULTANOV Official Bot**ga xush kelibsiz.\n"
-                            f"Bu yerda siz xizmatlardan foydalanishingiz va {CURRENCY_NAME} ishlashingiz mumkin.")
+                            f"👋 Assalomu alaykum, {message.from_user.full_name}!\n\n"
+                            f"🤖 Bot ilovasidan yoki menyudan foydalaning!🖥\n"
+                            f"Bu yerda siz UC sotib olishingiz yoki akkount sotib olishingiz mumkin.")
     
     await message.answer(welcome_text, reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
 
