@@ -1,27 +1,29 @@
 import logging
 import sqlite3
-import os  # Muhit o'zgaruvchilarini o'qish uchun qo'shildi
-from aiogram import Bot, Dispatcher, executor, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
+import os
+import asyncio # Asinxron ishga tushirish uchun qo'shildi
+
+# --- aiogram 3.x uchun yangilangan importlar ---
+from aiogram import Bot, Dispatcher, types 
+from aiogram.fsm.storage.memory import MemoryStorage 
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram import F # Magic Filter importi
 
 # --- MUHIT O'ZGARUVCHILARI (ENVIRONMENT VARIABLES) ---
-# os.environ.get() yordamida sozlamalarni muhitdan o'qish. 
-# Agar o'zgaruvchi o'rnatilmagan bo'lsa, defolt (ikkinchi) qiymat ishlatiladi.
 API_TOKEN = os.environ.get('API_TOKEN', 'BU_YERGA_BOT_TOKENINI_QOYING')
-ADMIN_ID = int(os.environ.get('ADMIN_ID', 123456789))  # Int ga o'tkazish
-REFERRAL_BONUS = int(os.environ.get('REFERRAL_BONUS', 500))  # Int ga o'tkazish
-DATABASE_FILE = os.environ.get('DATABASE_FILE', 'pubg_store.db') # DB nomi
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 123456789))
+REFERRAL_BONUS = int(os.environ.get('REFERRAL_BONUS', 500))
+DATABASE_FILE = os.environ.get('DATABASE_FILE', 'pubg_store.db') 
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
+dp = Dispatcher(storage=storage) # Aiogram 3.x da Dispatcher bot ni qabul qilmaydi
 
 # --- MA'LUMOTLAR BAZASI (SQLite) ---
-conn = sqlite3.connect(DATABASE_FILE) # O'zgaruvchidan foydalanish
+conn = sqlite3.connect(DATABASE_FILE) 
 cursor = conn.cursor()
 
 # Jadvallarni yaratish
@@ -49,7 +51,7 @@ init_products()
 
 # --- HOLATLAR (STATES) ---
 class BuyState(StatesGroup):
-    waiting_for_id = State() # O'yinchi ID sini kutish
+    waiting_for_id = State() 
 
 class AdminState(StatesGroup):
     add_acc_media = State()
@@ -63,13 +65,12 @@ class AdminState(StatesGroup):
 def get_user(user_id):
     return cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
 
-def add_user(user_id, referrer_id=None):
+async def add_user(user_id, referrer_id=None): # bot.send_message borligi uchun async qildik
     if not get_user(user_id):
         cursor.execute("INSERT INTO users (user_id, balance, referrer_id) VALUES (?, 0, ?)", (user_id, referrer_id))
         if referrer_id:
-            # REFERRAL_BONUS o'zgaruvchisidan foydalanish
             cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (REFERRAL_BONUS, referrer_id))
-            bot.send_message(referrer_id, f"🎉 Sizning havolangiz orqali do'stingiz qo'shildi! +{REFERRAL_BONUS} so'm.")
+            await bot.send_message(referrer_id, f"🎉 Sizning havolangiz orqali do'stingiz qo'shildi! +{REFERRAL_BONUS} so'm.")
         conn.commit()
 
 # --- TUGMALAR ---
@@ -80,20 +81,20 @@ menu_kb.add("🎮 Akkountlar", "👤 Kabinet")
 cancel_kb = ReplyKeyboardMarkup(resize_keyboard=True).add("❌ Bekor qilish")
 
 # --- HANDLERLAR: START VA MENU ---
-@dp.message_handler(commands=['start'])
+@dp.message.register(commands=['start']) # <<<< aiogram 3.x
 async def send_welcome(message: types.Message):
-    args = message.get_args()
+    args = message.text.split()[1] if len(message.text.split()) > 1 else None
     referrer_id = int(args) if args and args.isdigit() and int(args) != message.from_user.id else None
-    add_user(message.from_user.id, referrer_id)
+    await add_user(message.from_user.id, referrer_id)
     await message.answer(f"Assalomu alaykum, {message.from_user.first_name}! PUBG savdo botiga xush kelibsiz.", reply_markup=menu_kb)
 
-@dp.message_handler(text="❌ Bekor qilish", state="*")
+@dp.message.register(F.text == "❌ Bekor qilish", state="*") # <<<< aiogram 3.x
 async def cancel_action(message: types.Message, state: FSMContext):
-    await state.finish()
+    await state.clear() # .finish() o'rniga .clear() ishlatiladi
     await message.answer("Amaliyot bekor qilindi.", reply_markup=menu_kb)
 
 # --- KABINET ---
-@dp.message_handler(text="👤 Kabinet")
+@dp.message.register(F.text == "👤 Kabinet") # <<<< aiogram 3.x
 async def show_cabinet(message: types.Message):
     user = get_user(message.from_user.id)
     history = cursor.execute("SELECT action, amount, date FROM history WHERE user_id=? ORDER BY id DESC LIMIT 5", (message.from_user.id,)).fetchall()
@@ -112,7 +113,7 @@ async def show_cabinet(message: types.Message):
     await message.answer(text, parse_mode="Markdown")
 
 # --- UC VA MASHHURLIK OLISH ---
-@dp.message_handler(text=["💎 UC olish", "🔥 Mashhurlik"])
+@dp.message.register(F.text.in_(["💎 UC olish", "🔥 Mashhurlik"])) # <<<< aiogram 3.x
 async def shop_category(message: types.Message):
     category = 'uc' if "UC" in message.text else 'pop'
     items = cursor.execute("SELECT id, name, price FROM products WHERE category=?", (category,)).fetchall()
@@ -123,7 +124,7 @@ async def shop_category(message: types.Message):
     
     await message.answer(f"Quyidagilardan birini tanlang:", reply_markup=markup)
 
-@dp.callback_query_handler(text_contains="buy_")
+@dp.callback_query.register(F.data.startswith("buy_")) # <<<< aiogram 3.x
 async def buy_item_start(call: types.CallbackQuery, state: FSMContext):
     item_id = int(call.data.split("_")[1])
     item = cursor.execute("SELECT * FROM products WHERE id=?", (item_id,)).fetchone()
@@ -134,11 +135,11 @@ async def buy_item_start(call: types.CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(item_id=item_id, price=item[3], name=item[2])
-    await BuyState.waiting_for_id.set()
+    await state.set_state(BuyState.waiting_for_id) # <<<< aiogram 3.x
     await call.message.answer("Iltimos, PUBG ID raqamingizni kiriting:", reply_markup=cancel_kb)
     await call.answer()
 
-@dp.message_handler(state=BuyState.waiting_for_id)
+@dp.message.register(BuyState.waiting_for_id) # <<<< aiogram 3.x
 async def process_purchase(message: types.Message, state: FSMContext):
     pubg_id = message.text
     if not pubg_id.isdigit():
@@ -160,7 +161,6 @@ async def process_purchase(message: types.Message, state: FSMContext):
         InlineKeyboardButton("❌ Bekor qilish", callback_data=f"decline_{user_id}_{price}")
     )
     
-    # ADMIN_ID o'zgaruvchisidan foydalanish
     await bot.send_message(ADMIN_ID, 
                            f"🛒 **Yangi buyurtma!**\n"
                            f"👤 User: {message.from_user.full_name} (ID: {user_id})\n"
@@ -169,19 +169,20 @@ async def process_purchase(message: types.Message, state: FSMContext):
                            f"💰 Narx: {price} so'm", parse_mode="Markdown", reply_markup=admin_kb)
     
     await message.answer("✅ Buyurtma qabul qilindi! Admin tasdiqlashini kuting.", reply_markup=menu_kb)
-    await state.finish()
+    await state.clear() # <<<< aiogram 3.x
 
 # --- ADMIN BUYURTMANI BOSHQARISHI ---
-@dp.callback_query_handler(text_contains="approve_")
+@dp.callback_query.register(F.data.startswith("approve_")) # <<<< aiogram 3.x
 async def approve_order(call: types.CallbackQuery):
     _, user_id, _ = call.data.split("_")
-    await bot.send_message(user_id, "✅ Sizning buyurtmangiz muvaffaqiyatli bajarildi!")
+    await bot.send_message(int(user_id), "✅ Sizning buyurtmangiz muvaffaqiyatli bajarildi!")
     await call.message.edit_text(f"{call.message.text}\n\n✅ **Bajarildi**")
 
-@dp.callback_query_handler(text_contains="decline_")
+@dp.callback_query.register(F.data.startswith("decline_")) # <<<< aiogram 3.x
 async def decline_order(call: types.CallbackQuery):
     _, user_id, price = call.data.split("_")
     price = int(price)
+    user_id = int(user_id)
     
     # Pulni qaytarish
     cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (price, user_id))
@@ -192,7 +193,7 @@ async def decline_order(call: types.CallbackQuery):
     await call.message.edit_text(f"{call.message.text}\n\n❌ **Bekor qilindi**")
 
 # --- AKKOUNT SOTIB OLISH ---
-@dp.message_handler(text="🎮 Akkountlar")
+@dp.message.register(F.text == "🎮 Akkountlar") # <<<< aiogram 3.x
 async def list_accounts(message: types.Message):
     accounts = cursor.execute("SELECT * FROM accounts WHERE status='active'").fetchall()
     if not accounts:
@@ -208,7 +209,7 @@ async def list_accounts(message: types.Message):
         elif acc[5] == 'video':
             await bot.send_video(message.chat.id, acc[4], caption=caption, parse_mode="Markdown", reply_markup=kb)
 
-@dp.callback_query_handler(text_contains="buyacc_")
+@dp.callback_query.register(F.data.startswith("buyacc_")) # <<<< aiogram 3.x
 async def buy_account(call: types.CallbackQuery):
     acc_id = int(call.data.split("_")[1])
     acc = cursor.execute("SELECT * FROM accounts WHERE id=?", (acc_id,)).fetchone()
@@ -228,15 +229,14 @@ async def buy_account(call: types.CallbackQuery):
     cursor.execute("INSERT INTO history (user_id, action, amount) VALUES (?, ?, ?)", (call.from_user.id, f"Akkount: {acc[1]}", -acc[3]))
     conn.commit()
 
-    # ADMIN_ID o'zgaruvchisidan foydalanish
     await bot.send_message(ADMIN_ID, f"✅ Akkount sotildi!\nUser: {call.from_user.full_name}\nAkkount: {acc[1]}")
     await call.message.delete()
     await call.message.answer(f"✅ Tabriklaymiz! {acc[1]} akkountini sotib oldingiz. Admin siz bilan bog'lanadi.")
 
 # --- ADMIN PANEL ---
-@dp.message_handler(commands=['admin'])
+@dp.message.register(commands=['admin']) # <<<< aiogram 3.x
 async def admin_panel(message: types.Message):
-    if message.from_user.id == ADMIN_ID: # ADMIN_ID o'zgaruvchisidan foydalanish
+    if message.from_user.id == ADMIN_ID:
         kb = ReplyKeyboardMarkup(resize_keyboard=True)
         kb.add("➕ Akkount qo'shish", "💵 Narxlarni o'zgartirish")
         kb.add("⬅️ Asosiy menyu")
@@ -244,19 +244,20 @@ async def admin_panel(message: types.Message):
     else:
         await message.answer("Siz admin emassiz.")
 
-@dp.message_handler(text="⬅️ Asosiy menyu", state="*")
+@dp.message.register(F.text == "⬅️ Asosiy menyu", state="*") # <<<< aiogram 3.x
 async def back_main(message: types.Message, state: FSMContext):
-    await state.finish()
+    await state.clear() # <<<< aiogram 3.x
     await message.answer("Asosiy menyu", reply_markup=menu_kb)
 
 # -- Akkount qo'shish logikasi --
-@dp.message_handler(text="➕ Akkount qo'shish")
+@dp.message.register(F.text == "➕ Akkount qo'shish") # <<<< aiogram 3.x
 async def add_acc_start(message: types.Message):
     if message.from_user.id == ADMIN_ID:
-        await AdminState.add_acc_media.set()
+        # dp.fsm.set_state o'rniga state.set_state() handler ichida ishlatilishi afzal
+        await FSMContext(storage, key=types.Chat(id=message.chat.id), bot=bot).set_state(AdminState.add_acc_media)
         await message.answer("Akkount rasmi yoki videosini yuboring:", reply_markup=cancel_kb)
 
-@dp.message_handler(content_types=['photo', 'video'], state=AdminState.add_acc_media)
+@dp.message.register(F.content_type.in_({'photo', 'video'}), AdminState.add_acc_media) # <<<< aiogram 3.x
 async def add_acc_media(message: types.Message, state: FSMContext):
     if message.photo:
         file_id = message.photo[-1].file_id
@@ -266,22 +267,22 @@ async def add_acc_media(message: types.Message, state: FSMContext):
         file_type = 'video'
     
     await state.update_data(file_id=file_id, file_type=file_type)
-    await AdminState.add_acc_name.set()
+    await state.set_state(AdminState.add_acc_name) # <<<< aiogram 3.x
     await message.answer("Akkount nomini kiriting:")
 
-@dp.message_handler(state=AdminState.add_acc_name)
+@dp.message.register(AdminState.add_acc_name) # <<<< aiogram 3.x
 async def add_acc_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await AdminState.add_acc_desc.set()
+    await state.set_state(AdminState.add_acc_desc) # <<<< aiogram 3.x
     await message.answer("Akkount tavsifini kiriting:")
 
-@dp.message_handler(state=AdminState.add_acc_desc)
+@dp.message.register(AdminState.add_acc_desc) # <<<< aiogram 3.x
 async def add_acc_desc(message: types.Message, state: FSMContext):
     await state.update_data(description=message.text)
-    await AdminState.add_acc_price.set()
+    await state.set_state(AdminState.add_acc_price) # <<<< aiogram 3.x
     await message.answer("Akkount narxini kiriting (faqat raqam):")
 
-@dp.message_handler(state=AdminState.add_acc_price)
+@dp.message.register(AdminState.add_acc_price) # <<<< aiogram 3.x
 async def add_acc_finish(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
         await message.answer("Raqam kiriting!")
@@ -292,47 +293,48 @@ async def add_acc_finish(message: types.Message, state: FSMContext):
                    (data['name'], data['description'], int(message.text), data['file_id'], data['file_type']))
     conn.commit()
     await message.answer("✅ Akkount sotuvga qo'shildi!", reply_markup=menu_kb)
-    await state.finish()
+    await state.clear() # <<<< aiogram 3.x
 
 # -- Narxlarni o'zgartirish --
-@dp.message_handler(text="💵 Narxlarni o'zgartirish")
+@dp.message.register(F.text == "💵 Narxlarni o'zgartirish") # <<<< aiogram 3.x
 async def change_price_start(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         items = cursor.execute("SELECT id, name, price FROM products").fetchall()
         text = "Qaysi mahsulot narxini o'zgartirasiz ID sini kiriting:\n\n"
         for i in items:
             text += f"🆔 {i[0]} | {i[1]} | {i[2]} so'm\n"
-        await AdminState.change_price_select.set()
+        await FSMContext(storage, key=types.Chat(id=message.chat.id), bot=bot).set_state(AdminState.change_price_select)
         await message.answer(text, reply_markup=cancel_kb)
 
-@dp.message_handler(state=AdminState.change_price_select)
+@dp.message.register(AdminState.change_price_select) # <<<< aiogram 3.x
 async def change_price_select(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return
+    if not message.text.isdigit(): 
+        await message.answer("Iltimos, faqat raqam kiriting.")
+        return
     item_id = int(message.text)
     await state.update_data(item_id=item_id)
-    await AdminState.change_price_input.set()
+    await state.set_state(AdminState.change_price_input) # <<<< aiogram 3.x
     await message.answer("Yangi narxni kiriting:")
 
-@dp.message_handler(state=AdminState.change_price_input)
+@dp.message.register(AdminState.change_price_input) # <<<< aiogram 3.x
 async def change_price_finish(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return
+    if not message.text.isdigit(): 
+        await message.answer("Iltimos, faqat raqam kiriting.")
+        return
     data = await state.get_data()
     cursor.execute("UPDATE products SET price=? WHERE id=?", (int(message.text), data['item_id']))
     conn.commit()
     await message.answer("✅ Narx yangilandi!", reply_markup=menu_kb)
-    await state.finish()
-# ... qolgan kod o'zgarishsiz ...
+    await state.clear() # <<<< aiogram 3.x
 
-# aiogram 3.x da Dispatcher ni ishga tushirish uchun to'g'ri usul
+# --- BOTNI ISHGA TUSHIRISH (aiogram 3.x usuli) ---
 async def main():
     await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == '__main__':
-    # executor.start_polling(dp, skip_updates=True) # <<<< ESKI QATOR
+    # Eslatma: add_user funksiyasida bot.send_message bor, shuning uchun u async bo'lishi kerak.
+    # Men uni tepada to'g'riladim.
     try:
-        import asyncio
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Bot o'chirildi.")
-
-
