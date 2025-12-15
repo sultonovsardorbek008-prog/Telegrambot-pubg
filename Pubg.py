@@ -321,6 +321,18 @@ async def change_price_finish(message: types.Message, state: FSMContext):
     conn.commit()
     await message.answer("✅ Narx yangilandi!", reply_markup=menu_kb)
     await state.finish()
+# ... qolgan kod o'zgarishsiz ...
+
+# aiogram 3.x da Dispatcher ni ishga tushirish uchun to'g'ri usul
+async def main():
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    # executor.start_polling(dp, skip_updates=True) # <<<< ESKI QATOR
+    try:
+        import asyncio
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot o'chirildi.")
+
+
