@@ -12,12 +12,12 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
 
 # --- KONFIGURATSIYA ---
 API_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID")) # Admin ID ni ENV dan olish shart
 # DB_NAME
 DB_NAME = os.getenv("DB_NAME", "bot_database_pubg_uc.db")
 
 # REBRANDING: UC Cash
-CURRENCY_NAME = os.getenv("CURRENCY_NAME", "UC") # 💎
+CURRENCY_NAME = os.getenv("CURRENCY_NAME", "Olmos💎") 
 CURRENCY_SYMBOL = os.getenv("CURRENCY_SYMBOL", "💎")
 
 # Karta ma'lumotlari (Environmentdan yoki default)
@@ -57,7 +57,6 @@ def init_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS config 
                           (key TEXT PRIMARY KEY, value TEXT)''')
         
-        # 'projects' jadvali saqlanadi, lekin funksiyalarda 'Akkountlar' deb yuritiladi
         cursor.execute('''CREATE TABLE IF NOT EXISTS projects 
                           (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                            name TEXT, 
@@ -65,7 +64,9 @@ def init_db():
                            description TEXT,
                            media_id TEXT,
                            media_type TEXT,
-                           file_id TEXT)''')
+                           file_id TEXT,
+                           seller_id INTEGER DEFAULT NULL,
+                           is_approved INTEGER DEFAULT 1)''') # is_approved: 1=approved, 0=pending, -1=rejected
                            
         cursor.execute('''CREATE TABLE IF NOT EXISTS uc_packages
                           (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,15 +75,21 @@ def init_db():
                            usd_price REAL)''')
         conn.commit()
     
-    # Migratsiyalar (avvalgidek qoldi)
+    # Migratsiyalar (avvalgidek qoldi + yangi ustunlar)
     columns_users = ["status_level", "referrer_id", "joined_at"]
     for col in columns_users:
         try: db_query(f"ALTER TABLE users ADD COLUMN {col} INTEGER" if col == "status_level" or col == "referrer_id" else f"ALTER TABLE users ADD COLUMN {col} TEXT", commit=True)
         except: pass
     
-    columns_projects = ["description", "media_id", "media_type", "file_id"]
+    columns_projects = ["description", "media_id", "media_type", "file_id", "seller_id", "is_approved"]
     for col in columns_projects:
-        try: db_query(f"ALTER TABLE projects ADD COLUMN {col} TEXT", commit=True)
+        try: 
+            if col == "seller_id":
+                db_query(f"ALTER TABLE projects ADD COLUMN {col} INTEGER DEFAULT NULL", commit=True)
+            elif col == "is_approved":
+                db_query(f"ALTER TABLE projects ADD COLUMN {col} INTEGER DEFAULT 1", commit=True)
+            else:
+                db_query(f"ALTER TABLE projects ADD COLUMN {col} TEXT", commit=True)
         except: pass
 
 init_db()
@@ -97,13 +104,13 @@ def get_config(key, default_value):
 def set_config(key, value):
     db_query("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)), commit=True)
 
-# Status darajalari
+# Status darajalari (Developer Statusi qo'shildi)
 STATUS_DATA = {
     0: {"name": "👤 Start", "limit": 30, "price_month": 0},
     1: {"name": "🥈 Silver", "limit": 100, "desc": f"✅ Clicker (Pul ishlash)\n✅ Limit: 100 {CURRENCY_SYMBOL}"}, 
-    # Loyihalar -> Akkountlar
     2: {"name": "🥇 Gold", "limit": 1000, "desc": f"✅ Akkountlar 50% chegirma\n✅ Limit: 1000 {CURRENCY_SYMBOL}"}, 
-    3: {"name": "💎 Platinum", "limit": 100000, "desc": f"✅ Hammasi TEKIN (Xizmatlar ham)\n✅ Limit: 100000 {CURRENCY_SYMBOL}"} 
+    3: {"name": "💎 Platinum", "limit": 100000, "desc": f"✅ Hammasi TEKIN (Xizmatlar ham)\n✅ Limit: 100000 {CURRENCY_SYMBOL}"},
+    4: {"name": "💼 Developer", "limit": 500, "desc": f"✅ Akkount sotish imkoniyati\n✅ Pulni Yechib olish\n✅ Limit: 500 {CURRENCY_SYMBOL}"} # Yangi Status
 }
 
 def get_dynamic_prices():
@@ -113,7 +120,10 @@ def get_dynamic_prices():
         # Status narxlari (Oyiga)
         "pro_price": float(get_config("status_price_1", 20.0)),  # Silver
         "prem_price": float(get_config("status_price_2", 50.0)), # Gold
-        "king_price": float(get_config("status_price_3", 200.0)) # Platinum
+        "king_price": float(get_config("status_price_3", 200.0)), # Platinum
+        "dev_price": float(get_config("status_price_4", 25.0)), # Developer - 25 UC
+        # Akkount Sotish Komissiyasi
+        "proj_sell_commission": float(get_config("proj_sell_commission", 2.5)) 
     }
 
 def get_coin_rates():
@@ -198,20 +208,33 @@ class MoneyTransfer(StatesGroup):
     waiting_for_amount = State()
     confirm = State()
 
+# --- YANGI: USER AKKOUNT QO'SHISH STATES ---
+class AddProjUser(StatesGroup):
+    add_proj_name = State()
+    add_proj_price = State()
+    add_proj_desc = State()
+    add_proj_media = State()
+    add_proj_file = State()
+
+# --- YANGI: PUL YECHIB OLISH STATES ---
+class Withdraw(StatesGroup):
+    waiting_for_card = State()
+    waiting_for_amount = State()
+
 # --- KEYBOARDS ---
 def main_menu(user_id):
     kb = [
         [KeyboardButton(text="👤 Kabinet"), KeyboardButton(text="🌟 Statuslar")],
-        # Loyihalar -> Akkountlar
         [KeyboardButton(text="💎 UC Sotib olish"), KeyboardButton(text="📂 Akkountlar")], 
         [KeyboardButton(text="💳 Hisobni to'ldirish"), KeyboardButton(text="💸 Pul ishlash")],
-        [KeyboardButton(text="🏆 Top Foydalanuvchilar")]
+        [KeyboardButton(text="🤝 Hamkorlik"), KeyboardButton(text="🏆 Top Foydalanuvchilar")] # Hamkorlik qo'shildi
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def cancel_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🚫 Bekor qilish")]], resize_keyboard=True)
 
+# ... (edit_proj_kb va edit_uc_kb o'zgarishsiz) ...
 def edit_proj_kb(pid):
     kb = [
         [InlineKeyboardButton(text="✏️ Nomini tahrirlash", callback_data=f"ep_name:{pid}"),
@@ -338,13 +361,15 @@ async def show_status_menu(message: types.Message):
     kb = [
         [InlineKeyboardButton(text=f"🥈 Silver ({prices['pro_price']} {CURRENCY_SYMBOL})", callback_data="buy_status_1")], 
         [InlineKeyboardButton(text=f"🥇 Gold ({prices['prem_price']} {CURRENCY_SYMBOL})", callback_data="buy_status_2")], 
-        [InlineKeyboardButton(text=f"💎 Platinum ({prices['king_price']} {CURRENCY_SYMBOL})", callback_data="buy_status_3")] 
+        [InlineKeyboardButton(text=f"💎 Platinum ({prices['king_price']} {CURRENCY_SYMBOL})", callback_data="buy_status_3")],
+        [InlineKeyboardButton(text=f"💼 Developer ({prices['dev_price']} {CURRENCY_SYMBOL})", callback_data="buy_status_4")] # Developer qo'shildi
     ]
     
     info = (f"**🌟 STATUSLAR VA IMKONIYATLAR:**\n\n"
             f"🥈 **SILVER** - {prices['pro_price']} {CURRENCY_SYMBOL}\n{STATUS_DATA[1]['desc']}\n\n"
             f"🥇 **GOLD** - {prices['prem_price']} {CURRENCY_SYMBOL}\n{STATUS_DATA[2]['desc']}\n\n"
-            f"💎 **PLATINUM** - {prices['king_price']} {CURRENCY_SYMBOL}\n{STATUS_DATA[3]['desc']}")
+            f"💎 **PLATINUM** - {prices['king_price']} {CURRENCY_SYMBOL}\n{STATUS_DATA[3]['desc']}\n\n"
+            f"💼 **DEVELOPER** - {prices['dev_price']} {CURRENCY_SYMBOL}\n{STATUS_DATA[4]['desc']}") # Developer qo'shildi
     
     if isinstance(message, types.CallbackQuery):
         await message.message.edit_text(info, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
@@ -355,8 +380,10 @@ async def show_status_menu(message: types.Message):
 async def buy_status_handler(callback: types.CallbackQuery):
     lvl = int(callback.data.split("_")[-1])
     prices = get_dynamic_prices()
-    price_map = {1: prices['pro_price'], 2: prices['prem_price'], 3: prices['king_price']}
-    cost = price_map[lvl]
+    price_map = {1: prices['pro_price'], 2: prices['prem_price'], 3: prices['king_price'], 4: prices['dev_price']} # Developer qo'shildi
+    cost = price_map.get(lvl)
+    
+    if cost is None: return await callback.answer("Noto'g'ri status raqami.", show_alert=True)
     
     user = get_user_data(callback.from_user.id)
     
@@ -384,6 +411,7 @@ async def top_users(message: types.Message):
         if lvl == 1: badge = "🥈"
         elif lvl == 2: badge = "🥇"
         elif lvl == 3: badge = "💎"
+        elif lvl == 4: badge = "💼" # Developer qo'shildi
         
         # ID ni qisman yashirish (Professionalism)
         hidden_id = str(uid)[:4] + "..." + str(uid)[-2:]
@@ -391,28 +419,24 @@ async def top_users(message: types.Message):
         
     await message.answer(msg, parse_mode="Markdown")
 
-# --- AKKOUNTLAR (LOYIHALAR) ---
+# --- AKKOUNTLAR (LOYIHALAR) --- (Faqat tasdiqlangan akkountlarni ko'rsatish)
 @dp.message(F.text == "📂 Akkountlar")
 async def show_projects(message: types.Message):
-    projs = db_query("SELECT id, name FROM projects", fetchall=True)
-    # Loyihalar -> Akkountlar
+    projs = db_query("SELECT id, name FROM projects WHERE is_approved = 1", fetchall=True)
     if not projs: return await message.answer("📂 Hozircha akkountlar yuklanmagan.") 
     
     kb = []
     for pid, name in projs:
-        # Loyiha -> Akkount
         kb.append([InlineKeyboardButton(text=f"📁 {name} Akkounti", callback_data=f"view_proj_{pid}")]) 
-    # Loyihani -> Akkountni
     await message.answer("📥 Kerakli akkountni tanlang va yuklab oling:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 @dp.callback_query(F.data.startswith("view_proj_"))
 async def view_project(callback: types.CallbackQuery):
     pid = int(callback.data.split("_")[-1])
-    proj = db_query("SELECT name, price, description, media_id, media_type FROM projects WHERE id = ?", (pid,), fetchone=True)
+    proj = db_query("SELECT name, price, description, media_id, media_type, seller_id FROM projects WHERE id = ?", (pid,), fetchone=True)
     
-    # Loyiha -> Akkount
     if not proj: return await callback.answer("Akkount topilmadi.", show_alert=True) 
-    name, price, desc, mid, mtype = proj
+    name, price, desc, mid, mtype, seller_id = proj
     
     user = get_user_data(callback.from_user.id)
     discount = 0
@@ -427,6 +451,8 @@ async def view_project(callback: types.CallbackQuery):
         if final_price == 0: price_text = "**TEKIN (Status)**"
     
     caption = f"📂 **{name} Akkounti**\n\n📝 {desc}\n\n💰 Narxi: {price_text}"
+    if seller_id: caption += f"\n\n👤 Sotuvchi ID: `{seller_id}`" # Sotuvchi ID ko'rsatildi
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📥 Sotib olish / Yuklash", callback_data=f"buy_proj_{pid}")]])
     
     try:
@@ -446,9 +472,9 @@ async def view_project(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("buy_proj_"))
 async def buy_project_process(callback: types.CallbackQuery):
     pid = int(callback.data.split("_")[-1])
-    proj = db_query("SELECT price, file_id, name FROM projects WHERE id = ?", (pid,), fetchone=True)
+    proj = db_query("SELECT price, file_id, name, seller_id FROM projects WHERE id = ?", (pid,), fetchone=True)
     if not proj: return
-    price, file_id, name = proj
+    price, file_id, name, seller_id = proj
     
     user = get_user_data(callback.from_user.id)
     discount = 0
@@ -463,12 +489,20 @@ async def buy_project_process(callback: types.CallbackQuery):
     if final_price > 0:
         db_query("UPDATE users SET balance = balance - ? WHERE id = ?", (final_price, callback.from_user.id), commit=True)
         await callback.message.answer(f"✅ Xarid amalga oshdi! Hisobdan {format_num(final_price)} {CURRENCY_SYMBOL} yechildi.")
-    
-    # Loyiha -> Akkount
+        
+        # Sotuvchiga komissiya berish
+        if seller_id and final_price > 0:
+            commission = get_dynamic_prices()['proj_sell_commission']
+            db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (commission, seller_id), commit=True)
+            try:
+                await bot.send_message(seller_id, f"🎉 Akkountingiz sotildi (ID: {pid})! +{format_num(commission)} {CURRENCY_SYMBOL} hisobingizga tushdi.")
+            except: pass
+            
     await bot.send_document(callback.message.chat.id, file_id, caption=f"✅ **{name} Akkounti**\n\nFaylni muvaffaqiyatli yuklab oldingiz!")
     await callback.answer()
 
 # --- UC SOTIB OLISH --- (O'zgarishsiz)
+# ...
 
 @dp.message(F.text == "💎 UC Sotib olish")
 async def uc_buy_start(message: types.Message, state: FSMContext):
@@ -543,6 +577,7 @@ async def uc_sent_reject(callback: types.CallbackQuery):
     await callback.message.edit_text(callback.message.text + "\n\n❌ RAD ETILDI.")
 
 # --- PUL O'TKAZISH --- (O'zgarishsiz)
+# ...
 
 @dp.callback_query(F.data == "transfer_start")
 async def transfer_start(callback: types.CallbackQuery, state: FSMContext):
@@ -599,6 +634,227 @@ async def transfer_amount(message: types.Message, state: FSMContext):
     except: pass
     await state.clear()
 
+# --- YANGI: HAMKORLIK FUNKSIYALARI ---
+
+@dp.message(F.text == "🤝 Hamkorlik")
+async def partnership_menu(message: types.Message):
+    user = get_user_data(message.from_user.id)
+    prices = get_dynamic_prices()
+    
+    msg = (f"🤝 **AKKOUNT SOTISH HAMKORLIGI (DEVELOPER STATUS):**\n\n"
+           f"Bu bo'limda siz o'zingizning PUBG akkountlaringizni bot orqali soting va pul ishlang!\n\n"
+           f"✅ Har bir sotilgan akkount uchun sizga **{format_num(prices['proj_sell_commission'])} {CURRENCY_SYMBOL}** komissiya beriladi.\n"
+           f"✅ Developer statusi narxi: **{prices['dev_price']} {CURRENCY_SYMBOL}** (oyiga).\n\n")
+    
+    kb_rows = []
+    
+    if user['level'] < 4:
+        msg += f"🔒 Sizda **Developer** statusi mavjud emas. Akkount sotish va pulni yechib olish uchun statusni faollashtiring."
+        kb_rows.append([InlineKeyboardButton(text=f"💼 Developer Statusini Sotib Olish ({prices['dev_price']} {CURRENCY_SYMBOL})", callback_data="buy_status_4")])
+    else:
+        msg += f"✅ Sizda **💼 Developer** statusi faol!\nEndi akkountlarni qo'shishingiz va pulni yechib olishingiz mumkin."
+        kb_rows.append([InlineKeyboardButton(text="➕ Akkountingizni Qo'shish (Admin Tasdig'idan keyin sotiladi)", callback_data="user_add_proj")])
+        kb_rows.append([InlineKeyboardButton(text="💰 Pulni Yechib Olish", callback_data="withdraw_start")])
+    
+    await message.answer(msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="Markdown")
+
+# --- USER AKKOUNT QO'SHISH JARAYONI ---
+
+@dp.callback_query(F.data == "user_add_proj")
+async def user_add_proj_start(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user_data(callback.from_user.id)
+    if user['level'] < 4: 
+        return await callback.answer("Faqat Developer statusdagilar uchun!", show_alert=True)
+        
+    await callback.message.answer("📝 Sotmoqchi bo'lgan Akkount nomini yozing:", reply_markup=cancel_kb())
+    await state.set_state(AddProjUser.add_proj_name)
+    await callback.answer()
+
+@dp.message(AddProjUser.add_proj_name)
+async def user_add_p_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await message.answer(f"💰 Akkount Narxini kiriting ({CURRENCY_SYMBOL}):")
+    await state.set_state(AddProjUser.add_proj_price)
+
+@dp.message(AddProjUser.add_proj_price)
+async def user_add_p_price(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text)
+        if val <= 0: raise ValueError
+    except: return await message.answer("⚠️ Musbat raqam yozing!")
+    await state.update_data(price=val)
+    await message.answer("📝 Akkount haqida batafsil ma'lumot (Description):")
+    await state.set_state(AddProjUser.add_proj_desc)
+
+@dp.message(AddProjUser.add_proj_desc)
+async def user_add_p_desc(message: types.Message, state: FSMContext):
+    await state.update_data(desc=message.text)
+    await message.answer("🖼 Akkount Rasmi yoki Videosini yuboring (Yoki 'skip' deb yozing):")
+    await state.set_state(AddProjUser.add_proj_media)
+
+@dp.message(AddProjUser.add_proj_media)
+async def user_add_p_media(message: types.Message, state: FSMContext):
+    mid, mtype = None, None
+    if message.photo:
+        mid, mtype = message.photo[-1].file_id, "photo"
+    elif message.video:
+        mid, mtype = message.video.file_id, "video"
+    elif message.text and message.text.lower() == 'skip':
+        pass
+    else:
+        return await message.answer("⚠️ Rasm, video yoki 'skip' yozing.")
+        
+    await state.update_data(mid=mid, mtype=mtype)
+    await message.answer("📁 Endi asosiy faylni (Masalan, login/parol saqlangan TXT/JSON/PDF) yuboring:")
+    await state.set_state(AddProjUser.add_proj_file)
+
+@dp.message(AddProjUser.add_proj_file)
+async def user_add_p_file(message: types.Message, state: FSMContext):
+    if not message.document: return await message.answer("⚠️ Fayl yuborishingiz shart!")
+    data = await state.get_data()
+    
+    # Baza qo'shish (is_approved=0 - kutilmoqda)
+    db_query("INSERT INTO projects (name, price, description, media_id, media_type, file_id, seller_id, is_approved) VALUES (?,?,?,?,?,?,?,?)",
+             (data['name'], data['price'], data['desc'], data['mid'], data['mtype'], message.document.file_id, message.from_user.id, 0), commit=True)
+    
+    last_id = db_query("SELECT id FROM projects ORDER BY id DESC LIMIT 1", fetchone=True)[0]
+    
+    admin_msg = (f"🔥 **YANGI AKKOUNT QO'SHISH SO'ROVI!**\n"
+                 f"👤 Sotuvchi ID: `{message.from_user.id}` (@{message.from_user.username or 'yoq'})\n"
+                 f"🆔 Akkount ID: `{last_id}`\n"
+                 f"📝 Nomi: **{data['name']}**\n"
+                 f"💰 Narxi: **{format_num(data['price'])} {CURRENCY_SYMBOL}**\n\n"
+                 f"⬇️ Fayl pastda (Akkount ma'lumotlari)")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"adm_proj_app:{last_id}"),
+         InlineKeyboardButton(text="❌ Rad etish", callback_data=f"adm_proj_rej:{last_id}")]
+    ])
+    
+    # Faylni adminga yuborish
+    try:
+        await bot.send_document(ADMIN_ID, message.document.file_id, caption=admin_msg, reply_markup=kb, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Admin faylni qabul qilmadi: {e}")
+        await bot.send_message(ADMIN_ID, admin_msg + "\n\n⚠️ Fayl yuborilmadi, iltimos admin panel orqali tekshiring.", reply_markup=kb, parse_mode="Markdown")
+    
+    await message.answer("✅ Akkountingiz admin tasdig'iga yuborildi. Tasdiqlangandan keyin u sotuvga chiqariladi.", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+
+# --- ADMIN: AKKOUNT TASDIQLASH / RAD ETISH ---
+
+@dp.callback_query(F.data.startswith("adm_proj_app:"))
+async def adm_proj_approve(callback: types.CallbackQuery):
+    pid = int(callback.data.split(":")[1])
+    proj = db_query("SELECT seller_id, name FROM projects WHERE id = ?", (pid,), fetchone=True)
+    if not proj: return await callback.answer("Akkount topilmadi.", show_alert=True)
+    seller_id, name = proj
+    
+    db_query("UPDATE projects SET is_approved = 1 WHERE id = ?", (pid,), commit=True)
+    
+    await callback.message.edit_caption(callback.message.caption + "\n\n✅ AKKOUNT TASDIQLANDI. SOTUVGA CHIQARILDI.")
+    try:
+        await bot.send_message(seller_id, f"✅ Tabriklaymiz! Sizning **{name}** akkountingiz botda sotuvga chiqarildi! ID: `{pid}`")
+    except: pass
+
+@dp.callback_query(F.data.startswith("adm_proj_rej:"))
+async def adm_proj_reject(callback: types.CallbackQuery):
+    pid = int(callback.data.split(":")[1])
+    proj = db_query("SELECT seller_id, name FROM projects WHERE id = ?", (pid,), fetchone=True)
+    if not proj: return await callback.answer("Akkount topilmadi.", show_alert=True)
+    seller_id, name = proj
+
+    db_query("UPDATE projects SET is_approved = -1 WHERE id = ?", (pid,), commit=True) # Rad etilgan (kerak bo'lsa butunlay o'chirish mumkin)
+
+    await callback.message.edit_caption(callback.message.caption + "\n\n❌ AKKOUNT RAD ETILDI.")
+    try:
+        await bot.send_message(seller_id, f"❌ Afsuski, sizning **{name}** akkountingiz admin tomonidan rad etildi.")
+    except: pass
+
+# --- PUL YECHIB OLISH FUNKSIYALARI (FAQAT DEVELOPER UCHUN) ---
+
+@dp.callback_query(F.data == "withdraw_start")
+async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user_data(callback.from_user.id)
+    if user['level'] < 4: 
+        return await callback.answer("Faqat Developer statusdagilar pul yechib oladi!", show_alert=True)
+        
+    await callback.message.answer("💳 Pul tushadigan **Karta Raqamingizni** kiriting:", reply_markup=cancel_kb())
+    await state.set_state(Withdraw.waiting_for_card)
+    await callback.answer()
+
+@dp.message(Withdraw.waiting_for_card)
+async def withdraw_card(message: types.Message, state: FSMContext):
+    card = message.text.strip()
+    if not card.isdigit() or not (16 <= len(card) <= 19): 
+        return await message.answer("⚠️ Iltimos, to'g'ri karta raqamini kiriting (16-19 raqam).")
+        
+    await state.update_data(card=card)
+    user = get_user_data(message.from_user.id)
+    
+    await message.answer(f"💰 Qancha **{CURRENCY_NAME}** yechib olmoqchisiz?\n"
+                         f"Sizning balansingiz: {format_num(user['balance'])} {CURRENCY_SYMBOL}", reply_markup=cancel_kb())
+    await state.set_state(Withdraw.waiting_for_amount)
+
+@dp.message(Withdraw.waiting_for_amount)
+async def withdraw_amount(message: types.Message, state: FSMContext):
+    try:
+        amount = float(message.text)
+    except ValueError:
+        return await message.answer("⚠️ Iltimos, to'g'ri raqam kiriting (masalan: 10 yoki 5.5)!")
+        
+    if amount <= 0: return await message.answer("⚠️ Miqdor musbat bo'lishi kerak!")
+    
+    user = get_user_data(message.from_user.id)
+    if user['balance'] < amount:
+        return await message.answer("⚠️ Hisobingizda yetarli mablag' yo'q!")
+        
+    data = await state.get_data()
+    
+    # Balansdan yechib olish
+    db_query("UPDATE users SET balance = balance - ? WHERE id = ?", (amount, message.from_user.id), commit=True)
+    
+    admin_message = (f"💸 **YANGI PUL YECHIB OLISH SO'ROVI!**\n"
+                     f"👤 User: ID `{message.from_user.id}` (@{message.from_user.username or 'yoq'})\n"
+                     f"💰 Miqdor: **{format_num(amount)} {CURRENCY_SYMBOL}**\n"
+                     f"💳 Karta: `{data['card']}`\n\n"
+                     f"❌ Admin Pulni {format_num(amount)} {CURRENCY_SYMBOL} yechib olganini tasdiqlash uchun pastdagi tugmani bosing.")
+                     
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Pulni o'tkazdim va Tasdiqladim", callback_data=f"wd_ok:{message.from_user.id}:{amount}:{data['card']}"),
+         InlineKeyboardButton(text="❌ Rad etish (Balansni qaytarish)", callback_data=f"wd_no:{message.from_user.id}:{amount}")]
+    ])
+    
+    await bot.send_message(ADMIN_ID, admin_message, reply_markup=kb, parse_mode="Markdown")
+    
+    await message.answer(f"✅ So'rovingiz adminga yuborildi. {format_num(amount)} {CURRENCY_SYMBOL} tez orada `{data['card']}` kartangizga o'tkaziladi.", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("wd_ok:"))
+async def withdraw_approve(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    uid, amt, card = int(parts[1]), float(parts[2]), parts[3]
+    
+    # Pulni o'tkazganini tasdiqlash (bu yerda faqat xabar yuboriladi, balans oldin yechilgan)
+    try:
+        await bot.send_message(uid, f"✅ **Pulni Yechib Olish Tasdiqlandi!**\n{format_num(amt)} {CURRENCY_SYMBOL} `{card}` kartangizga o'tkazildi.")
+    except: pass
+    await callback.message.edit_text(callback.message.text + "\n\n✅ O'TKAZILDI VA TASDIQLANDI.")
+
+@dp.callback_query(F.data.startswith("wd_no:"))
+async def withdraw_reject(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    uid, amt = int(parts[1]), float(parts[2])
+    
+    # Balansni qaytarish
+    db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (amt, uid), commit=True)
+    
+    try:
+        await bot.send_message(uid, f"❌ Pul yechib olish rad etildi. Hisobingizga {format_num(amt)} {CURRENCY_SYMBOL} qaytarildi.")
+    except: pass
+    await callback.message.edit_text(callback.message.text + "\n\n❌ RAD ETILDI. BALANS QAYTARILDI.")
+
+
 # --- ADMIN PANEL ---
 
 @dp.message(Command("admin"))
@@ -619,24 +875,29 @@ async def admin_panel(message: types.Message):
 
 @dp.callback_query(F.data == "adm_back_main")
 async def adm_back_main(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
     await admin_panel(callback.message)
 
 # --- AKKOUNT QO'SHISH (LOYIHA QO'SHISH) ---
+# ... (Admin funksiyalari o'zgarishsiz) ...
 
 @dp.callback_query(F.data == "adm_add_proj")
 async def adm_add_proj_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     # Loyiha -> Akkount
     await callback.message.edit_text("📝 Akkount nomini yozing:", reply_markup=cancel_kb())
     await state.set_state(AdminState.add_proj_name)
 
 @dp.message(AdminState.add_proj_name)
 async def adm_p_name(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     await state.update_data(name=message.text)
     await message.answer(f"💰 Narxini kiriting ({CURRENCY_SYMBOL}):")
     await state.set_state(AdminState.add_proj_price)
 
 @dp.message(AdminState.add_proj_price)
 async def adm_p_price(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try:
         val = float(message.text)
     except: return await message.answer("⚠️ Raqam yozing!")
@@ -647,12 +908,14 @@ async def adm_p_price(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.add_proj_desc)
 async def adm_p_desc(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     await state.update_data(desc=message.text)
     await message.answer("🖼 Akkount Rasmi yoki Videosini yuboring (Yoki 'skip' deb yozing):")
     await state.set_state(AdminState.add_proj_media)
 
 @dp.message(AdminState.add_proj_media)
 async def adm_p_media(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     mid, mtype = None, None
     if message.photo:
         mid, mtype = message.photo[-1].file_id, "photo"
@@ -669,11 +932,13 @@ async def adm_p_media(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.add_proj_file)
 async def adm_p_file(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     if not message.document: return await message.answer("⚠️ Fayl yuborishingiz shart!")
     data = await state.get_data()
     
-    db_query("INSERT INTO projects (name, price, description, media_id, media_type, file_id) VALUES (?,?,?,?,?,?)",
-             (data['name'], data['price'], data['desc'], data['mid'], data['mtype'], message.document.file_id), commit=True)
+    # Admin qo'shgan akkount avtomatik tasdiqlanadi (is_approved=1)
+    db_query("INSERT INTO projects (name, price, description, media_id, media_type, file_id, is_approved) VALUES (?,?,?,?,?,?,?)",
+             (data['name'], data['price'], data['desc'], data['mid'], data['mtype'], message.document.file_id, 1), commit=True)
     
     # Loyiha -> Akkount
     await message.answer("✅ Akkount bazaga qo'shildi!", reply_markup=main_menu(message.from_user.id))
@@ -684,33 +949,53 @@ async def adm_p_file(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_manage_proj")
 async def adm_manage_proj(callback: types.CallbackQuery):
-    projs = db_query("SELECT id, name FROM projects", fetchall=True)
+    if callback.from_user.id != ADMIN_ID: return
+    # Tasdiqlangan va kutilayotgan akkountlarni ko'rsatish
+    projs = db_query("SELECT id, name, is_approved, seller_id FROM projects", fetchall=True)
     if not projs: return await callback.message.edit_text("📂 Hozircha akkountlar mavjud emas.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Ortga", callback_data="adm_back_main")]]))
     
     kb = []
     msg = "✏️ **Tahrirlash uchun Akkountni tanlang:**\n\n"
     
-    for pid, name in projs:
-        kb.append([InlineKeyboardButton(text=f"[{pid}] {name} Akkounti", callback_data=f"edit_proj:{pid}")])
+    for pid, name, is_approved, seller_id in projs:
+        status_emoji = "✅" if is_approved == 1 else ("⏳" if is_approved == 0 else "❌")
+        seller_info = f" (Sotuvchi: {seller_id})" if seller_id else ""
+        kb.append([InlineKeyboardButton(text=f"{status_emoji} [{pid}] {name} Akkounti{seller_info}", callback_data=f"edit_proj:{pid}")])
         
     kb.append([InlineKeyboardButton(text="⬅️ Ortga", callback_data="adm_back_main")])
     await callback.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("edit_proj:"))
 async def adm_edit_proj_select(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     pid = int(callback.data.split(":")[1])
-    proj = db_query("SELECT name, price FROM projects WHERE id = ?", (pid,), fetchone=True)
+    proj = db_query("SELECT name, price, is_approved, seller_id FROM projects WHERE id = ?", (pid,), fetchone=True)
     if not proj: return await callback.answer("Akkount topilmadi.", show_alert=True)
     
-    name, price = proj
+    name, price, is_approved, seller_id = proj
     
     await state.update_data(edit_pid=pid)
     
-    msg = f"**Akkount ID:** `{pid}`\n**Nomi:** {name}\n**Narxi:** {format_num(price)} {CURRENCY_SYMBOL}\n\nQaysi maydonni tahrirlamoqchisiz?"
-    await callback.message.edit_text(msg, reply_markup=edit_proj_kb(pid), parse_mode="Markdown")
+    status_text = "Tasdiqlangan" if is_approved == 1 else ("Kutilmoqda" if is_approved == 0 else "Rad etilgan")
+    seller_text = f"\n**Sotuvchi ID:** `{seller_id}`" if seller_id else ""
+    
+    msg = f"**Akkount ID:** `{pid}`{seller_text}\n**Nomi:** {name}\n**Narxi:** {format_num(price)} {CURRENCY_SYMBOL}\n**Status:** {status_text}\n\nQaysi maydonni tahrirlamoqchisiz?"
+    
+    # Tahrirlash tugmalariga qo'shimcha tasdiqlash tugmalari
+    dynamic_kb = edit_proj_kb(pid)
+    
+    if is_approved == 0:
+        new_row = [
+            InlineKeyboardButton(text="✅ So'rovni Tasdiqlash", callback_data=f"adm_proj_app:{pid}"),
+            InlineKeyboardButton(text="❌ So'rovni Rad etish", callback_data=f"adm_proj_rej:{pid}")
+        ]
+        dynamic_kb.inline_keyboard.insert(0, new_row)
+        
+    await callback.message.edit_text(msg, reply_markup=dynamic_kb, parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("ep_"))
 async def adm_edit_proj_fields(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     action, pid = callback.data.split(":")
     pid = int(pid)
     await state.update_data(edit_pid=pid, edit_field=action)
@@ -744,6 +1029,7 @@ async def adm_edit_proj_fields(callback: types.CallbackQuery, state: FSMContext)
 # Akkount tahrirlash handlerlari
 @dp.message(AdminState.edit_proj_name)
 async def adm_save_proj_name(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     data = await state.get_data()
     db_query("UPDATE projects SET name = ? WHERE id = ?", (message.text, data['edit_pid']), commit=True)
     await message.answer("✅ Akkount nomi tahrirlandi.", reply_markup=main_menu(message.from_user.id))
@@ -751,6 +1037,7 @@ async def adm_save_proj_name(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.edit_proj_price)
 async def adm_save_proj_price(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try: val = float(message.text)
     except: return await message.answer("⚠️ Iltimos, to'g'ri raqam kiriting.")
     data = await state.get_data()
@@ -760,6 +1047,7 @@ async def adm_save_proj_price(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.edit_proj_desc)
 async def adm_save_proj_desc(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     data = await state.get_data()
     db_query("UPDATE projects SET description = ? WHERE id = ?", (message.text, data['edit_pid']), commit=True)
     await message.answer("✅ Akkount tavsifi tahrirlandi.", reply_markup=main_menu(message.from_user.id))
@@ -767,6 +1055,7 @@ async def adm_save_proj_desc(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.edit_proj_media)
 async def adm_save_proj_media(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     mid, mtype = None, None
     if message.photo:
         mid, mtype = message.photo[-1].file_id, "photo"
@@ -784,6 +1073,7 @@ async def adm_save_proj_media(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.edit_proj_file)
 async def adm_save_proj_file(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     if not message.document: return await message.answer("⚠️ Iltimos, fayl yuboring.")
     data = await state.get_data()
     db_query("UPDATE projects SET file_id = ? WHERE id = ?", (message.document.file_id, data['edit_pid']), commit=True)
@@ -795,6 +1085,7 @@ async def adm_save_proj_file(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_manage_uc")
 async def adm_manage_uc(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
     packages = db_query("SELECT id, uc_amount, uzs_price, usd_price FROM uc_packages ORDER BY uc_amount ASC", fetchall=True)
     
     msg = "💎 **UC To'plamlari (Qo'shish / Tahrirlash):**\n\n"
@@ -814,11 +1105,13 @@ async def adm_manage_uc(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "adm_add_uc")
 async def adm_add_uc_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     await callback.message.edit_text("💎 Qo'shiladigan UC miqdorini kiriting (faqat son):", reply_markup=cancel_kb())
     await state.set_state(AdminState.add_uc_amount)
 
 @dp.message(AdminState.add_uc_amount)
 async def adm_add_uc_amount(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try:
         uc_amt = int(message.text)
         if uc_amt <= 0: raise ValueError
@@ -830,6 +1123,7 @@ async def adm_add_uc_amount(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.add_uc_uzs)
 async def adm_add_uc_uzs(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try:
         uzs_p = float(message.text)
         if uzs_p <= 0: raise ValueError
@@ -841,6 +1135,7 @@ async def adm_add_uc_uzs(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.add_uc_usd)
 async def adm_add_uc_usd(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try:
         usd_p = float(message.text)
         if usd_p <= 0: raise ValueError
@@ -857,6 +1152,7 @@ async def adm_add_uc_usd(message: types.Message, state: FSMContext):
 # UC Tahrirlash logikasi
 @dp.callback_query(F.data.startswith("edit_uc:"))
 async def adm_edit_uc_select(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     pid = int(callback.data.split(":")[1])
     pkg = db_query("SELECT uc_amount, uzs_price, usd_price FROM uc_packages WHERE id = ?", (pid,), fetchone=True)
     if not pkg: return await callback.answer("To'plam topilmadi.", show_alert=True)
@@ -870,6 +1166,7 @@ async def adm_edit_uc_select(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("eu_"))
 async def adm_edit_uc_fields(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     action, pid = callback.data.split(":")
     pid = int(pid)
     await state.update_data(edit_pid=pid, edit_field=action)
@@ -897,6 +1194,7 @@ async def adm_edit_uc_fields(callback: types.CallbackQuery, state: FSMContext):
 # UC tahrirlash handlerlari
 @dp.message(AdminState.edit_uc_amount)
 async def adm_save_uc_amount(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try: val = int(message.text)
     except: return await message.answer("⚠️ Iltimos, butun son kiriting.")
     data = await state.get_data()
@@ -906,6 +1204,7 @@ async def adm_save_uc_amount(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.edit_uc_uzs)
 async def adm_save_uc_uzs(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try: val = float(message.text)
     except: return await message.answer("⚠️ Iltimos, raqam kiriting.")
     data = await state.get_data()
@@ -915,6 +1214,7 @@ async def adm_save_uc_uzs(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.edit_uc_usd)
 async def adm_save_uc_usd(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try: val = float(message.text)
     except: return await message.answer("⚠️ Iltimos, raqam kiriting.")
     data = await state.get_data()
@@ -923,23 +1223,27 @@ async def adm_save_uc_usd(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# --- NARXLAR VA KONFIGURATSIYALAR --- (O'zgarishsiz)
+# --- NARXLAR VA KONFIGURATSIYALAR --- (Developer narxi qo'shildi)
 
 @dp.callback_query(F.data == "adm_prices")
 async def adm_prices_list(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
     p = get_dynamic_prices()
     kb = [
         [InlineKeyboardButton(text=f"Ref Bonus ({p['ref_reward']})", callback_data="set_ref_reward"),
          InlineKeyboardButton(text=f"Click ({p['click_reward']})", callback_data="set_click_reward")],
         [InlineKeyboardButton(text=f"Silver ({p['pro_price']})", callback_data="set_status_price_1"),
          InlineKeyboardButton(text=f"Gold ({p['prem_price']})", callback_data="set_status_price_2")],
-        [InlineKeyboardButton(text=f"Platinum ({p['king_price']})", callback_data="set_status_price_3")],
+        [InlineKeyboardButton(text=f"Platinum ({p['king_price']})", callback_data="set_status_price_3"),
+         InlineKeyboardButton(text=f"Developer ({p['dev_price']})", callback_data="set_status_price_4")], # Developer narxi
+        [InlineKeyboardButton(text=f"Sell Comm ({p['proj_sell_commission']})", callback_data="set_proj_sell_commission")], # Sotuv komissiyasi
         [InlineKeyboardButton(text="⬅️ Ortga", callback_data="adm_back_main")]
     ]
     await callback.message.edit_text("⚙️ **Narxlarni sozlash:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 @dp.callback_query(F.data.startswith("set_"))
 async def adm_set_val(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     key = callback.data.replace("set_", "")
     await state.update_data(conf_key=key)
     await callback.message.edit_text(f"Yangi qiymatni yozing (Hozirgi: {key}):", reply_markup=cancel_kb())
@@ -947,6 +1251,7 @@ async def adm_set_val(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(AdminState.change_config_value)
 async def adm_save_val(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     try:
         val = float(message.text)
         data = await state.get_data()
@@ -960,11 +1265,13 @@ async def adm_save_val(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_broadcast")
 async def adm_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
     await callback.message.edit_text("📢 Barcha foydalanuvchilarga yuboriladigan xabarni (rasm/video/matn) yuboring:", reply_markup=cancel_kb())
     await state.set_state(AdminState.broadcast_msg)
 
 @dp.message(AdminState.broadcast_msg)
 async def adm_broadcast_send(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
     users = db_query("SELECT id FROM users", fetchall=True)
     count = 0
     await message.answer(f"⏳ Xabar {len(users)} ta foydalanuvchiga yuborilmoqda...")
@@ -1048,6 +1355,7 @@ async def topup_rec(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("p_ok:"))
 async def approve_pay(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
     parts = callback.data.split(":")
     uid, amt = int(parts[1]), float(parts[2])
     db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (amt, uid), commit=True)
@@ -1058,11 +1366,13 @@ async def approve_pay(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("p_no:"))
 async def reject_pay(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
     uid = int(callback.data.split(":")[1])
     try:
         await bot.send_message(uid, "❌ To'lovingiz rad etildi. Iltimos, admin bilan bog'laning.")
     except: pass
     await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ RAD ETILDI")
+
 
 # --- BOTNI ISHGA TUSHIRISH ---
 
