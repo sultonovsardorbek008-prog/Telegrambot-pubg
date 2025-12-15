@@ -182,7 +182,7 @@ class MoneyTransfer(StatesGroup):
 def main_menu(user_id):
     kb = [
         [KeyboardButton(text="👤 Kabinet"), KeyboardButton(text="🌟 Statuslar")],
-        [KeyboardButton(text="💎 UC Sotib olish"), KeyboardButton(text="📂 Loyihalar")], # Xizmatlar -> UC Sotib olish
+        [KeyboardButton(text="💎 UC Sotib olish"), KeyboardButton(text="📂 Akkountlar")], # Xizmatlar -> UC Sotib olish
         [KeyboardButton(text="💳 Hisobni to'ldirish"), KeyboardButton(text="💸 Pul ishlash")],
         [KeyboardButton(text="🏆 Top Foydalanuvchilar")]
     ]
@@ -340,7 +340,7 @@ async def buy_status_handler(callback: types.CallbackQuery):
 @dp.message(F.text == "🏆 Top Foydalanuvchilar")
 async def top_users(message: types.Message):
     users = db_query("SELECT id, balance, status_level FROM users ORDER BY balance DESC LIMIT 10", fetchall=True)
-    msg = f"🏆 **{CURRENCY_NAME} MILLIONERLARI:**\n\n"
+    msg = f"🏆 Boylik reytingi":**\n\n"
     
     for idx, (uid, bal, lvl) in enumerate(users, 1):
         badge = ""
@@ -355,22 +355,22 @@ async def top_users(message: types.Message):
     await message.answer(msg, parse_mode="Markdown")
 
 # LOYIHALAR
-@dp.message(F.text == "📂 Loyihalar")
+@dp.message(F.text == "📂 Akkountlar")
 async def show_projects(message: types.Message):
     projs = db_query("SELECT id, name FROM projects", fetchall=True)
-    if not projs: return await message.answer("📂 Hozircha loyihalar yuklanmagan.")
+    if not projs: return await message.answer("📂 Hozircha akkountlar yo‘q")
     
     kb = []
     for pid, name in projs:
         kb.append([InlineKeyboardButton(text=f"📁 {name}", callback_data=f"view_proj_{pid}")])
-    await message.answer("📥 Kerakli loyihani tanlang va yuklab oling:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await message.answer("📥 Kerakli akkountni tanlang va sotib oling:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 @dp.callback_query(F.data.startswith("view_proj_"))
 async def view_project(callback: types.CallbackQuery):
     pid = int(callback.data.split("_")[-1])
     proj = db_query("SELECT name, price, description, media_id, media_type FROM projects WHERE id = ?", (pid,), fetchone=True)
     
-    if not proj: return await callback.answer("Loyiha topilmadi.", show_alert=True)
+    if not proj: return await callback.answer("Akkount topilmadi.", show_alert=True)
     name, price, desc, mid, mtype = proj
     
     user = get_user_data(callback.from_user.id)
